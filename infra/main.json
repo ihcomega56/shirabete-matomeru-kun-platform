@@ -1,0 +1,392 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.48.1.52935",
+      "templateHash": "11255568893377916073"
+    }
+  },
+  "parameters": {
+    "namePrefix": {
+      "type": "string",
+      "defaultValue": "smk",
+      "minLength": 2,
+      "maxLength": 8,
+      "metadata": {
+        "description": "Resource name prefix. Use lowercase letters and numbers only."
+      }
+    },
+    "environmentName": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 8,
+      "metadata": {
+        "description": "Environment name such as dev, test, or prod."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for regional resources."
+      }
+    },
+    "foundryProjectEndpoint": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Foundry project endpoint. Leave empty until the project is provisioned and verified."
+      }
+    },
+    "foundryModelDeployment": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Foundry model deployment name. Leave empty to use the local development research provider."
+      }
+    },
+    "enableFoundryResearch": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable the Foundry research provider. If enabled, endpoint, model deployment, and managed identity must be configured."
+      }
+    },
+    "learnMcpUrl": {
+      "type": "string",
+      "defaultValue": "https://learn.microsoft.com/api/mcp",
+      "metadata": {
+        "description": "Microsoft Learn MCP endpoint. The backend currently allows only the verified official endpoint."
+      }
+    },
+    "foundryAgentNamePrefix": {
+      "type": "string",
+      "defaultValue": "shirabete",
+      "minLength": 1,
+      "maxLength": 20,
+      "metadata": {
+        "description": "Agent name prefix used to create short-lived Foundry agents."
+      }
+    },
+    "appServicePlanSku": {
+      "type": "string",
+      "defaultValue": "P1v3",
+      "allowedValues": [
+        "B1",
+        "B2",
+        "B3",
+        "P0v3",
+        "P1v3",
+        "P2v3",
+        "P3v3"
+      ],
+      "metadata": {
+        "description": "App Service plan SKU. Review regional availability and production capacity before deployment."
+      }
+    },
+    "javaRuntime": {
+      "type": "string",
+      "defaultValue": "JAVA|25-java25",
+      "metadata": {
+        "description": "App Service Java runtime stack. Verify the selected runtime is supported in the target region."
+      }
+    },
+    "searchSku": {
+      "type": "string",
+      "defaultValue": "standard",
+      "metadata": {
+        "description": "Azure AI Search SKU. Standard is used for production-oriented features."
+      }
+    }
+  },
+  "variables": {
+    "suffix": "[uniqueString(subscription().id, resourceGroup().id)]",
+    "appServicePlanTier": "[if(startsWith(parameters('appServicePlanSku'), 'P'), 'PremiumV3', 'Basic')]",
+    "apiName": "[format('{0}-{1}-api-{2}', parameters('namePrefix'), parameters('environmentName'), variables('suffix'))]",
+    "staticWebAppName": "[format('{0}-{1}-web-{2}', parameters('namePrefix'), parameters('environmentName'), variables('suffix'))]",
+    "storageName": "[toLower(format('smk{0}{1}{2}', take(parameters('namePrefix'), 4), take(parameters('environmentName'), 4), take(variables('suffix'), 13)))]",
+    "searchName": "[format('{0}-{1}-search-{2}', parameters('namePrefix'), parameters('environmentName'), variables('suffix'))]",
+    "vaultName": "[take(format('{0}-{1}-kv-{2}', parameters('namePrefix'), parameters('environmentName'), variables('suffix')), 24)]",
+    "appInsightsName": "[format('{0}-{1}-appi-{2}', parameters('namePrefix'), parameters('environmentName'), variables('suffix'))]",
+    "logAnalyticsName": "[format('{0}-{1}-logs-{2}', parameters('namePrefix'), parameters('environmentName'), variables('suffix'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2022-10-01",
+      "name": "[variables('logAnalyticsName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 30,
+        "features": {
+          "enableLogAccessUsingOnlyResourcePermissions": true
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/components",
+      "apiVersion": "2020-02-02",
+      "name": "[variables('appInsightsName')]",
+      "location": "[parameters('location')]",
+      "kind": "web",
+      "properties": {
+        "Application_Type": "web",
+        "IngestionMode": "LogAnalytics",
+        "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]",
+        "DisableIpMasking": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2023-12-01",
+      "name": "[format('{0}-{1}-plan', parameters('namePrefix'), parameters('environmentName'))]",
+      "location": "[parameters('location')]",
+      "kind": "linux",
+      "sku": {
+        "name": "[parameters('appServicePlanSku')]",
+        "tier": "[variables('appServicePlanTier')]",
+        "capacity": 1
+      },
+      "properties": {
+        "reserved": true
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2023-12-01",
+      "name": "[variables('apiName')]",
+      "location": "[parameters('location')]",
+      "kind": "app,linux",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format('{0}-{1}-plan', parameters('namePrefix'), parameters('environmentName')))]",
+        "httpsOnly": true,
+        "clientAffinityEnabled": false,
+        "siteConfig": {
+          "linuxFxVersion": "[parameters('javaRuntime')]",
+          "alwaysOn": true,
+          "ftpsState": "Disabled",
+          "minTlsVersion": "1.2",
+          "http20Enabled": true,
+          "healthCheckPath": "/api/health",
+          "appCommandLine": ""
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', format('{0}-{1}-plan', parameters('namePrefix'), parameters('environmentName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('storageName')]",
+      "location": "[parameters('location')]",
+      "kind": "StorageV2",
+      "sku": {
+        "name": "Standard_ZRS"
+      },
+      "properties": {
+        "accessTier": "Hot",
+        "allowBlobPublicAccess": false,
+        "allowSharedKeyAccess": false,
+        "minimumTlsVersion": "TLS1_2",
+        "supportsHttpsTrafficOnly": true,
+        "publicNetworkAccess": "Enabled"
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}', variables('storageName'), 'default')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}/{2}', variables('storageName'), 'default', 'reports')]",
+      "properties": {
+        "publicAccess": "None"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', variables('storageName'), 'default')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Search/searchServices",
+      "apiVersion": "2023-11-01",
+      "name": "[variables('searchName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('searchSku')]"
+      },
+      "properties": {
+        "replicaCount": 1,
+        "partitionCount": 1,
+        "hostingMode": "default",
+        "publicNetworkAccess": "enabled",
+        "semanticSearch": "free",
+        "authOptions": {
+          "aadOrApiKey": {
+            "aadAuthFailureMode": "http401WithBearerChallenge"
+          }
+        },
+        "disableLocalAuth": true
+      }
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2023-07-01",
+      "name": "[variables('vaultName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "tenantId": "[subscription().tenantId]",
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "enableRbacAuthorization": true,
+        "enablePurgeProtection": true,
+        "enableSoftDelete": true,
+        "publicNetworkAccess": "Enabled",
+        "networkAcls": {
+          "bypass": "AzureServices",
+          "defaultAction": "Allow"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites/config",
+      "apiVersion": "2023-12-01",
+      "name": "[format('{0}/{1}', variables('apiName'), 'appsettings')]",
+      "properties": {
+        "RESEARCH_MODE": "[if(parameters('enableFoundryResearch'), 'foundry', 'local')]",
+        "STORAGE_MODE": "local",
+        "SEARCH_MODE": "local",
+        "REPORT_STORAGE_DIRECTORY": "/home/data/reports",
+        "CORS_ALLOWED_ORIGINS": "[format('https://{0}', reference(resourceId('Microsoft.Web/staticSites', variables('staticWebAppName')), '2023-12-01').defaultHostname)]",
+        "FOUNDRY_PROJECT_ENDPOINT": "[parameters('foundryProjectEndpoint')]",
+        "FOUNDRY_MODEL_DEPLOYMENT": "[parameters('foundryModelDeployment')]",
+        "FOUNDRY_AGENT_NAME_PREFIX": "[parameters('foundryAgentNamePrefix')]",
+        "LEARN_MCP_URL": "[parameters('learnMcpUrl')]",
+        "APPLICATIONINSIGHTS_CONNECTION_STRING": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName')), '2020-02-02').ConnectionString]",
+        "APPLICATIONINSIGHTS_ROLE_NAME": "[variables('apiName')]",
+        "WEBSITES_PORT": "8080",
+        "WEBSITE_ENABLE_APP_SERVICE_STORAGE": "true"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', variables('apiName'))]",
+        "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]",
+        "[resourceId('Microsoft.Web/staticSites', variables('staticWebAppName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/staticSites",
+      "apiVersion": "2023-12-01",
+      "name": "[variables('staticWebAppName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard",
+        "tier": "Standard"
+      },
+      "properties": {
+        "stagingEnvironmentPolicy": "Enabled",
+        "allowConfigFileUpdates": true
+      }
+    },
+    {
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "scope": "[resourceId('Microsoft.Web/sites', variables('apiName'))]",
+      "name": "to-workspace",
+      "properties": {
+        "workspaceId": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]",
+        "logs": [
+          {
+            "category": "AppServiceHTTPLogs",
+            "enabled": true
+          },
+          {
+            "category": "AppServiceConsoleLogs",
+            "enabled": true
+          },
+          {
+            "category": "AppServiceAppLogs",
+            "enabled": true
+          }
+        ],
+        "metrics": [
+          {
+            "category": "AllMetrics",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', variables('apiName'))]",
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "apiBaseUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', variables('apiName')), '2023-12-01').defaultHostName)]"
+    },
+    "staticWebAppName": {
+      "type": "string",
+      "value": "[variables('staticWebAppName')]"
+    },
+    "staticWebAppDefaultHostname": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Web/staticSites', variables('staticWebAppName')), '2023-12-01').defaultHostname]"
+    },
+    "storageAccountName": {
+      "type": "string",
+      "value": "[variables('storageName')]"
+    },
+    "reportsContainerName": {
+      "type": "string",
+      "value": "reports"
+    },
+    "searchServiceName": {
+      "type": "string",
+      "value": "[variables('searchName')]"
+    },
+    "searchEndpoint": {
+      "type": "string",
+      "value": "[format('https://{0}.search.windows.net', variables('searchName'))]"
+    },
+    "keyVaultName": {
+      "type": "string",
+      "value": "[variables('vaultName')]"
+    },
+    "keyVaultUri": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.KeyVault/vaults', variables('vaultName')), '2023-07-01').vaultUri]"
+    },
+    "applicationInsightsName": {
+      "type": "string",
+      "value": "[variables('appInsightsName')]"
+    },
+    "logAnalyticsWorkspaceName": {
+      "type": "string",
+      "value": "[variables('logAnalyticsName')]"
+    },
+    "apiManagedIdentityPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Web/sites', variables('apiName')), '2023-12-01', 'full').identity.principalId]"
+    }
+  }
+}
