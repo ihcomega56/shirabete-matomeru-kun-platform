@@ -33,9 +33,9 @@ API契約とローカル起動手順は [アーキテクチャ概要](docs/archi
 ```bash
 az login
 az account set --subscription <subscription-id>
-az group create --name rg-shirabete-dev --location japaneast
+az group create --name rg-shiramato-kun-dev --location japaneast
 az deployment group what-if \
-  --resource-group rg-shirabete-dev \
+  --resource-group rg-shiramato-kun-dev \
   --template-file infra/main.bicep \
   --parameters environmentName=dev
 ```
